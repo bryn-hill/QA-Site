@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mock Checkout – Stripe‑like UX</title>
+  <style>
+    /* ===== Reset-ish ===== */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f6f9fc; color: #0a2540; }
+    a { color: inherit; }
+
+    /* ===== Layout ===== */
+    .container { max-width: 1000px; margin: 40px auto; padding: 0 16px; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+    .checkout .brand { grid-column: 1 / -1; }
+    .brand .lock { font-size: 14px; opacity: .75; }
+
+    .checkout { display: none; grid-template-columns: 1.2fr .8fr; gap: 24px; }
+    .checkout.is-active { display: grid; }
+    @media (max-width: 900px) { .checkout.is-active { grid-template-columns: 1fr; } }
+    .product-stage { margin-bottom: 48px; }
+    .product-hero { background: radial-gradient(circle at top left, #6c5ce7, #635bff, #4338ca); color: #fff; border-radius: 24px; padding: 48px; display: grid; grid-template-columns: 2fr 1fr; gap: 32px; align-items: center; }
+    .product-hero h1 { margin: 0 0 12px; font-size: clamp(32px, 5vw, 44px); }
+    .product-hero p { margin: 0 0 20px; font-size: 16px; line-height: 1.5; max-width: 520px; }
+    .product-hero ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .product-hero li { display: flex; align-items: center; gap: 10px; font-size: 14px; opacity: .9; }
+    .product-hero li::before { content: '•'; font-size: 20px; line-height: 1; }
+    .product-hero-art { justify-self: end; text-align: right; }
+    .product-hero-art span { display: inline-block; background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.2); padding: 12px 18px; border-radius: 999px; font-size: 14px; }
+    @media (max-width: 900px) {
+      .product-hero { grid-template-columns: 1fr; text-align: left; }
+      .product-hero-art { justify-self: start; text-align: left; }
+    }
+    .product-layout { margin-top: 32px; display: grid; grid-template-columns: 1.4fr .6fr; gap: 24px; align-items: start; }
+    @media (max-width: 900px) { .product-layout { grid-template-columns: 1fr; } }
+
+    .product-list { background: transparent; padding: 0; }
+    .product-list header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
+    .product-list h2 { margin: 0; font-size: 24px; }
+    .product-tagline { font-size: 14px; color: #475569; }
+    .product-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+    .product-card { border: 1px solid #d1d9ee; border-radius: 18px; padding: 18px; display: flex; flex-direction: column; gap: 14px; background: #ffffff; box-shadow: 0 8px 18px rgba(15, 23, 42, .08); transition: transform .25s ease, box-shadow .25s ease; }
+    .product-card:hover { transform: translateY(-3px); box-shadow: 0 16px 30px rgba(15, 23, 42, .12); }
+    .product-figure { width: 100%; aspect-ratio: 4 / 3; border-radius: 14px; background: #ffffff; border: 1px solid #e2e8f0; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); }
+    .product-figure::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(148,163,184,.12), transparent 60%); z-index: 0; pointer-events: none; }
+    .product-figure::before { content: ''; position: absolute; inset: 12px; border-radius: 12px; border: 1px dashed rgba(148,163,184,.35); opacity: .6; z-index: 0; pointer-events: none; }
+    .product-card[data-product-id="hoodie"] .product-figure::after { background: linear-gradient(135deg, rgba(14,165,233,.12), transparent 60%); }
+    .product-card[data-product-id="tee"] .product-figure::after { background: linear-gradient(135deg, rgba(99,102,241,.12), transparent 60%); }
+    .product-card[data-product-id="sleeve"] .product-figure::after { background: linear-gradient(135deg, rgba(16,185,129,.12), transparent 60%); }
+    .product-figure img { width: 82%; max-width: 220px; object-fit: contain; position: relative; z-index: 1; filter: drop-shadow(0 8px 18px rgba(15,23,42,.1)); }
+    .product-image { width: 100%; height: 100%; object-fit: contain; padding: 12px; position: relative; z-index: 1; mix-blend-mode: normal; }
+    .product-card h3 { margin: 0; font-size: 18px; }
+    .product-card p { margin: 0; font-size: 14px; color: #475569; flex: 1; }
+    .product-price { font-weight: 700; color: #0a2540; font-size: 16px; }
+    .qty-control { display: inline-flex; align-items: center; gap: 8px; background: #f8fafc; padding: 6px 10px; border-radius: 999px; }
+    .qty-control button { appearance: none; border: none; background: #e2e8f0; border-radius: 50%; width: 28px; height: 28px; font-size: 18px; line-height: 1; cursor: pointer; color: #1e293b; display: grid; place-items: center; transition: background .2s ease; }
+    .qty-control button:hover { background: #cbd5f5; }
+    .qty-control input { width: 48px; padding: 6px; text-align: center; border: none; background: transparent; font-weight: 600; color: #0f172a; }
+    .product-summary { background: #fff; border-radius: 18px; box-shadow: 0 10px 30px rgba(15, 23, 42, .12); padding: 24px; position: sticky; top: 88px; }
+    .product-summary .btn { width: 100%; margin-top: 16px; }
+    .summary .empty { color: #64748b; font-size: 13px; text-align: center; padding: 24px 0; }
+
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 6px 24px rgba(50,50,93,.08), 0 2px 8px rgba(0,0,0,.06); padding: 20px; }
+    .section-title { font-weight: 700; font-size: 16px; margin: 8px 0 16px; display: flex; align-items: center; gap: 8px; }
+    .section-title .badge { font-size: 12px; background: #edf2f7; color: #425466; border-radius: 999px; padding: 2px 8px; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid-3 { grid-template-columns: 2fr 1fr 1fr; }
+    .grid-4 { grid-template-columns: 2fr 1fr 1fr 1fr; }
+    .grid-1 { grid-template-columns: 1fr; }
+    @media (max-width: 600px) { .grid, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+
+    label { display: block; font-size: 12px; color: #425466; margin-bottom: 6px; }
+    input, select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font-size: 14px; color: #0a2540; outline: none; }
+    input:focus, select:focus { border-color: #635bff; box-shadow: 0 0 0 3px rgba(99, 91, 255, .15); }
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-color: #fff;
+      background-image:
+        linear-gradient(45deg, transparent 50%, #4f46e5 50%),
+        linear-gradient(135deg, #4f46e5 50%, transparent 50%),
+        linear-gradient(to right, rgba(203, 213, 225, .6), rgba(203, 213, 225, 0));
+      background-position:
+        calc(100% - 20px) center,
+        calc(100% - 14px) center,
+        calc(100% - 44px) center;
+      background-size: 8px 8px, 8px 8px, 1px 24px;
+      background-repeat: no-repeat;
+      padding-right: 44px;
+      cursor: pointer;
+    }
+    select::-ms-expand { display: none; }
+    .input-row { margin-bottom: 12px; }
+
+    .help { font-size: 12px; color: #6b7280; margin-top: 4px; }
+
+    .error { border-color: #ef4444 !important; }
+    .error-msg { color: #b91c1c; font-size: 12px; margin-top: 6px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 1px, 1px); border: 0; }
+
+    .summary { position: sticky; top: 20px; }
+    .summary h3 { margin: 0 0 12px; }
+    .summary .line { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #e5e7eb; }
+    .summary .total { font-weight: 800; font-size: 18px; }
+    .summary .items { margin-bottom: 12px; }
+
+    .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #334155; }
+
+    .paybar { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+
+    .btn { appearance: none; background: #635bff; color: white; padding: 12px 16px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; }
+    .btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .link-back { appearance: none; background: none; border: none; color: #4f46e5; font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; padding: 0; margin-bottom: 16px; cursor: pointer; }
+    .link-back:hover { text-decoration: underline; }
+    .link-back:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; border-radius: 6px; }
+
+    .footer-note { font-size: 12px; color: #64748b; margin-top: 8px; }
+
+    .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.6); border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Result screens */
+    .result { text-align: center; padding: 40px 20px; }
+    .result h2 { margin: 0 0 10px; }
+    .result .orderid { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: #f1f5f9; display: inline-block; padding: 4px 8px; border-radius: 6px; }
+    .result .again { margin-top: 16px; }
+    .result .again .btn { background: #0ea5e9; }
+    .result .fail { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="app">
+      <div id="productView" class="product-stage" data-testid="product-stage">
+        <section class="product-hero" aria-labelledby="merch-title" data-testid="product-hero">
+          <div>
+            <h1 id="merch-title">Entelect Merch Store</h1>
+            <p>Outfit your team with gear engineered for late-night deploys and Friday demo days. Mix and match to build a kit that feels like Entelect.</p>
+            <ul>
+              <li>Premium fabrics that survive hackathons and travel.</li>
+              <li>Designed by the Entelect culture team for dev comfort.</li>
+              <li>Free exchanges within South Africa.</li>
+            </ul>
+          </div>
+          <div class="product-hero-art" aria-hidden="true">
+            <span>New drop · Wnter 2024</span>
+          </div>
+        </section>
+        <div class="product-layout">
+          <section class="product-list" aria-labelledby="catalog-title" data-testid="product-list">
+            <header>
+              <h2 id="catalog-title">Pick your gear</h2>
+              <span class="product-tagline">Curated by the Entelect Guld</span>
+            </header>
+            <div class="product-grid" data-testid="product-grid">
+              <article class="product-card" data-product-id="hoodie" data-testid="product-card-hoodie">
+                <div class="product-figure" data-testid="product-figure-hoodie">
+                  <img src="hoodie.png" alt="Entelect Hoodie" class="product-image" data-testid="product-image-hoodie" />
+                </div>
+                <h3>Entelect Hoodie</h3>
+                <p>Mid-weight fleece hoodie with an embroidered Entelect badge to keep you warm at hackathons.</p>
+                <div class="product-price">R799.00</div>
+                <div class="qty-control" aria-label="Choose quantity for Entelect Hoodie">
+                  <button type="button" data-action="decrement" aria-label="Decrease quantity" data-testid="qty-decrement-hoodie">−</button>
+                  <input type="number" value="0" data-role="qty" aria-label="Quantity" data-testid="qty-input-hoodie" />
+                  <button type="button" data-action="increment" aria-label="Increase quantity" data-testid="qty-increment-hoodie">+</button>
+                </div>
+              </article>
+              <article class="product-card" data-product-id="tee" data-testid="product-card-tee">
+                <div class="product-figure" data-testid="product-figure-tee">
+                  <img src="tshirt.png" alt="Entelect Tech Tee" class="product-image" data-testid="product-image-tee" />
+                </div>
+                <h3>Entelect Tech Tee</h3>
+                <p>Soft-touch tee made for sprint reviews. Breathable fabric, bold Entelect print.</p>
+                <div class="product-price">R399.00</div>
+                <div class="qty-control" aria-label="Choose quantity for Entelect Tech Tee">
+                  <button type="button" data-action="decrement" aria-label="Decrease quantity" data-testid="qty-decrement-tee">−</button>
+                  <input type="number" value="0" data-role="qty" aria-label="Quantity" data-testid="qty-input-tee" />
+                  <button type="button" data-action="increment" aria-label="Increase quantity" data-testid="qty-increment-tee">+</button>
+                </div>
+              </article>
+              <article class="product-card" data-product-id="sleeve" data-testid="product-card-sleeve">
+                <div class="product-figure" data-testid="product-figure-sleeve">
+                  <img src="bag.png" alt="Entelect Laptop Sleeve" class="product-image" data-testid="product-image-sleeve" />
+                </div>
+                <h3>Entelect Laptop Sleeve</h3>
+                <p>Padded sleeve with waterproof finish. Protects your gear between client meetings.</p>
+                <div class="product-price">R459.00</div>
+                <div class="qty-control" aria-label="Choose quantity for Entelect Laptop Sleeve">
+                  <button type="button" data-action="decrement" aria-label="Decrease quantity" data-testid="qty-decrement-sleeve">−</button>
+                  <input type="number" value="0" data-role="qty" aria-label="Quantity" data-testid="qty-input-sleeve" />
+                  <button type="button" data-action="increment" aria-label="Increase quantity" data-testid="qty-increment-sleeve">+</button>
+                </div>
+              </article>
+            </div>
+          </section>
+          <aside class="summary product-summary" aria-label="Cart overview" data-testid="product-summary">
+            <h3>Your cart</h3>
+            <div class="items" id="productItems" data-testid="product-cart-items"></div>
+            <div class="line"><span>Subtotal</span><span id="productSubtotal" data-testid="product-cart-subtotal">R0.00</span></div>
+            <button type="button" class="btn" id="startCheckout" disabled data-testid="start-checkout">Checkout</button>
+          </aside>
+        </div>
+      </div>
+
+      <div id="checkoutStage" class="checkout" aria-hidden="true" data-testid="checkout-stage">
+        <div class="brand" aria-label="Secure checkout">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 1.75c-3.451 0-6.25 2.799-6.25 6.25v2.25H4.5c-.69 0-1.25.56-1.25 1.25v8.5c0 .69.56 1.25 1.25 1.25h15c.69 0 1.25-.56 1.25-1.25v-8.5c0-.69-.56-1.25-1.25-1.25h-1.25V8c0-3.451-2.799-6.25-6.25-6.25Zm-3.75 6.25C8.25 5.178 9.928 3.5 12 3.5S15.75 5.178 15.75 8v2.25h-7.5V8Z" fill="#0a2540"/></svg>
+          <div>
+            <strong>Secure chekout</strong>
+            <!-- <div class="lock">Mocked flow for QA – no real charges.</div> -->
+          </div>
+        </div>
+        <form id="checkoutForm" class="card" novalidate aria-describedby="form-errors" data-testid="checkout-form">
+          <button type="button" class="link-back" id="backToShopping" aria-describedby="backToShoppingHint" data-testid="back-to-shopping">← Back to shopping</button>
+          <span id="backToShoppingHint" class="sr-only">Return to product selection</span>
+          <div class="section-title">Contact <span class="badge">Step 1</span></div>
+          <div class="grid">
+            <div class="input-row">
+              <label for="fullName">Full name</label>
+              <input id="fullName" name="fullName" autocomplete="name" required data-testid="full-name" />
+              <div class="error-msg" data-error-for="fullName" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" autocomplete="email" required data-testid="email" />
+              <div class="error-msg" data-error-for="email" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="section-title">Shipping address <span class="badge">Step 2</span></div>
+          <div class="grid grid-1">
+            <div class="input-row">
+              <label for="address1">Address line 1</label>
+              <input id="address1" name="address1" autocomplete="address-line1" required data-testid="address-line1" />
+              <div class="error-msg" data-error-for="address1" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="city">City</label>
+              <input id="city" name="city" autocomplete="address-level2" required data-testid="city" />
+              <div class="error-msg" data-error-for="city" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="province">Province / Region</label>
+              <select id="province" name="province" autocomplete="address-level1" required data-testid="province">
+                <option value="" disabled selected>Select province</option>
+                <option value="GP">Gauteng</option>
+                <option value="WC">Western Cape</option>
+                <option value="KZN">KwaZulu-Natal</option>
+                <option value="EC">Eastern Cape</option>
+                <option value="NC">Northern Cape</option>
+                <option value="FS">Free State</option>
+                <option value="MP">Mpumalanga</option>
+                <option value="NW">North West</option>
+                <option value="LP">Limpopo</option>
+              </select>
+              <div class="error-msg" data-error-for="province" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="postal">Postal code</label>
+              <input id="postal" name="postal" inputmode="numeric" autocomplete="postal-code" required data-testid="postal" />
+              <div class="error-msg" data-error-for="postal" aria-live="polite"></div>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="input-row">
+              <label for="country">Country</label>
+              <select id="country" name="country" required data-testid="country">
+                <option value="" disabled selected>Select country</option>
+                <option value="ZA">South Africa</option>
+                <option value="BW">Botswana</option>
+                <option value="NA">Namibia</option>
+              </select>
+              <div class="error-msg" data-error-for="country" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="shipping">Shipping method</label>
+              <select id="shipping" name="shipping" required data-testid="shipping">
+                <option value="standard" selected>Standard (3–5 days) – R0.00</option>
+                <option value="express">Express (1–2 days) – R99.00</option>
+              </select>
+              <div class="help">Updates oder total.</div>
+            </div>
+          </div>
+
+          <div class="section-title">Payment <span class="badge">Step 3</span></div>
+          <div class="grid">
+            <div class="input-row">
+              <label for="cardNumber">Card number</label>
+              <input id="cardNumber" name="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" maxlength="19" required data-testid="card-number" />
+              <div class="error-msg" data-error-for="cardNumber" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="cardName">Name on card</label>
+              <input id="cardName" name="cardName" autocomplete="cc-name" required data-testid="card-name" />
+              <div class="error-msg" data-error-for="cardName" aria-live="polite"></div>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="input-row">
+              <label for="expiry">Expiry (MM/YY)</label>
+              <input id="expiry" name="expiry" inputmode="numeric" placeholder="MM/YY" maxlength="5" autocomplete="cc-exp" required data-testid="card-expiry" />
+              <div class="error-msg" data-error-for="expiry" aria-live="polite"></div>
+            </div>
+            <div class="input-row">
+              <label for="cvc">CVC</label>
+              <input id="cvc" name="cvc" inputmode="numeric" maxlength="4" autocomplete="cc-csc" required data-testid="card-cvc" />
+              <div class="error-msg" data-error-for="cvc" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="grid">
+            <div class="input-row">
+              <label for="coupon">Coupon code</label>
+              <input id="coupon" name="coupon" placeholder="SAVE10 or FREESHIP" data-testid="coupon" />
+              <div class="help">Try <code>SAVE10</code> (10% off) or <code>FREESHIP</code> (shipping free).</div>
+            </div>
+            <div class="input-row">
+              <label for="notes">Order notes (optional)</label>
+              <input id="notes" name="notes" placeholder="Gift note, delivery instructions…" data-testid="notes" />
+            </div>
+          </div>
+
+          <div class="paybar">
+            <button class="btn" id="payBtn" type="submit" disabled data-testid="pay-btn">Pay <span id="payTotal">R0.00</span></button>
+            <span class="pill" title="Card brands for trust signals" aria-hidden="true">Visa · MasterCard · Amex</span>
+          </div>
+          <div id="form-errors" class="footer-note" aria-live="polite"></div>
+        </form>
+
+        <aside class="card summary" aria-label="Order summary" data-testid="order-summary">
+            <h3>Order summery</h3>
+          <div class="items" id="items"></div>
+          <div class="line"><span>Subtotal</span><span id="subtotal">R0.00</span></div>
+          <div class="line"><span>Shipping</span><span id="shippingTotal">R0.00</span></div>
+          <div class="line"><span>Tax (10%)</span><span id="tax">R0.00</span></div>
+          <div class="line"><strong class="total">Total</strong><strong class="total" id="total">R0.00</strong></div>
+        </aside>
+      </div>
+
+      <div id="result" class="card result" hidden></div>
+    </div>
+  </div>
+
+  <script>
+    // ===== Utilities =====
+    const ZAR = new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR' });
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+    function formatCardNumber(value) {
+      return value.replace(/\D/g, '')
+        .slice(0, 16)
+        .replace(/(.{4})/g, '$1 ')
+        .trim();
+    }
+    function luhnCheck(numStr) {
+      const s = numStr.replace(/\s+/g, '');
+      if (!/^\d{13,19}$/.test(s)) return false;
+      let sum = 0; let shouldDouble = false;
+      for (let i = s.length - 1; i >= 0; i--) {
+        let digit = parseInt(s[i], 10);
+        if (shouldDouble) {
+          digit *= 2; if (digit > 9) digit -= 9;
+        }
+        sum += digit; shouldDouble = !shouldDouble;
+      }
+      return sum % 10 === 0;
+    }
+    function formatExpiry(value) {
+      const digits = value.replace(/\D/g, '').slice(0,4);
+      if (digits.length <= 2) return digits;
+      return digits.slice(0,2) + '/' + digits.slice(2);
+    }
+    function expiryValid(mmYY) {
+      const m = mmYY.match(/^(\d{2})\/(\d{2})$/);
+      if (!m) return false;
+      let [_, mm, yy] = m; mm = +mm; yy = +yy;
+      if (mm < 1 || mm > 12) return false;
+      const now = new Date();
+      const year = 2000 + yy; // assume 20YY
+      const exp = new Date(year, mm); // end of month
+      return exp > now;
+    }
+
+    // ===== Product catalogue =====
+    const products = [
+      { id: 'hoodie', name: 'Entelect Hoodie', price: 79900 },
+      { id: 'tee', name: 'Entelect Tech Tee', price: 39900 },
+      { id: 'sleeve', name: 'Entelect Laptop Sleeve', price: 45900 },
+    ];
+    const selections = {};
+    products.forEach(p => { selections[p.id] = 0; });
+    let cart = [];
+
+    const state = {
+      shippingMethod: 'express',
+      coupon: null,
+      freeShipping: false,
+      discountPct: 0,
+      couponStack: [],
+    };
+
+    function centsToZAR(cents) { return ZAR.format(cents / 100); }
+
+    function compute() {
+      const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+      const hasItems = subtotal > 0;
+      const shipping = !hasItems
+        ? 0
+        : state.shippingMethod === 'express' && !state.freeShipping
+          ? 9900
+          : (!state.freeShipping && subtotal < 50000 ? 2500 : 0);
+      const discount = Math.round(subtotal * state.discountPct);
+      const taxed = Math.max(0, subtotal - discount);
+      const tax = Math.round(taxed * 0.15);
+      const total = taxed + tax + shipping;
+      return { subtotal, shipping, discount, tax, total };
+    }
+
+    function syncCart() {
+      cart = products
+        .map(p => ({ ...p, qty: selections[p.id] }))
+        .filter(item => item.qty > 0);
+      renderSummaries();
+      togglePayButton();
+    }
+
+    function setQuantity(productId, qty) {
+      const card = document.querySelector(`[data-product-id="${productId}"]`);
+      if (!card) return;
+      const input = card.querySelector('[data-role="qty"]');
+      let next = typeof qty === 'number' ? qty : Number(qty);
+      if (Number.isNaN(next)) next = 0;
+      selections[productId] = next;
+      if (input) input.value = String(next);
+      syncCart();
+    }
+
+    function renderSummaries() {
+      const totals = compute();
+      renderProductSummary(totals);
+      renderCheckoutSummary(totals);
+    }
+
+    function renderProductSummary({ subtotal }) {
+      const productItems = document.getElementById('productItems');
+      if (productItems) {
+        productItems.innerHTML = cart.length
+          ? cart.map(i => `<div class="line"><span>${i.name} × ${i.qty}</span><span>${centsToZAR(i.price * i.qty)}</span></div>`).join('')
+          : '<div class="empty">Add your favourite Entelect merch to get started.</div>';
+      }
+      const productSubtotal = document.getElementById('productSubtotal');
+      if (productSubtotal) productSubtotal.textContent = centsToZAR(subtotal);
+      const startCheckout = document.getElementById('startCheckout');
+      if (startCheckout) startCheckout.disabled = cart.length === 0;
+    }
+
+    function renderCheckoutSummary({ subtotal, shipping, tax, total }) {
+      const itemsEl = document.getElementById('items');
+      if (itemsEl) {
+        itemsEl.innerHTML = cart.length
+          ? cart.map(i => `<div class="line"><span>${i.name} × ${i.qty}</span><span>${centsToZAR(i.price * i.qty)}</span></div>`).join('')
+          : '<div class="empty">Your cart is empty. Return to add Entelect merch.</div>';
+      }
+      const subtotalEl = document.getElementById('subtotal');
+      const shippingEl = document.getElementById('shippingTotal');
+      const taxEl = document.getElementById('tax');
+      const totalEl = document.getElementById('total');
+      const payTotal = document.getElementById('payTotal');
+      if (subtotalEl) subtotalEl.textContent = centsToZAR(subtotal);
+      if (shippingEl) shippingEl.textContent = centsToZAR(shipping);
+      if (taxEl) taxEl.textContent = centsToZAR(tax);
+      if (totalEl) totalEl.textContent = centsToZAR(total);
+      if (payTotal) payTotal.textContent = centsToZAR(total);
+    }
+
+    function applyCoupon(code) {
+      const c = (code || '').trim().toUpperCase();
+      state.couponStack = state.couponStack || [];
+      if (!c) {
+        state.discountPct = 0;
+        state.freeShipping = false;
+        state.coupon = null;
+        state.couponStack = [];
+        return { ok: true, msg: 'No coupon applied.' };
+      }
+      if (c === 'SAVE10') {
+        state.discountPct += 0.05;
+        state.couponStack.push(c);
+        state.coupon = state.couponStack.join(', ');
+        return { ok: true, msg: '10% discount applied.' }
+      }
+      if (c === 'FREESHIP') {
+        state.freeShipping = true;
+        state.couponStack.push(c);
+        state.coupon = state.couponStack.join(', ');
+        return { ok: true, msg: 'Shipping cost removed.' }
+      }
+      return { ok: false, msg: 'Invalid coupon code.' }
+    }
+
+    // ===== Validation =====
+    const F = {
+      fullName: () => req('fullName'),
+      email: () => email('email'),
+      address1: () => req('address1'),
+      city: () => req('city'),
+      province: () => req('province'),
+      postal: () => req('postal'),
+      country: () => req('country'),
+      cardNumber: () => cardNumber('cardNumber'),
+      cardName: () => req('cardName'),
+      expiry: () => expiry('expiry'),
+      cvc: () => cvc('cvc'),
+    };
+
+    function req(id) {
+      const el = document.getElementById(id);
+      const ok = !!el.value.trim();
+      setFieldState(el, ok, ok ? '' : 'Required');
+      return ok;
+    }
+    function email(id) {
+      const el = document.getElementById(id);
+      const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(el.value);
+      setFieldState(el, ok, ok ? '' : 'Enter a valid email');
+      return ok;
+    }
+    function cardNumber(id) {
+      const el = document.getElementById(id);
+      const raw = el.value.replace(/\s+/g, '');
+      const ok = luhnCheck(el.value) && raw.length >= 16;
+      setFieldState(el, ok, ok ? '' : 'Invalid card number');
+      return ok;
+    }
+    function expiry(id) {
+      const el = document.getElementById(id);
+      const ok = expiryValid(el.value);
+      setFieldState(el, ok, ok ? '' : 'Invalid expiry');
+      return ok;
+    }
+    function cvc(id) {
+      const el = document.getElementById(id);
+      const ok = /^\d{3,4}$/.test(el.value);
+      setFieldState(el, ok, ok ? '' : 'Invalid CVC');
+      return ok;
+    }
+
+    function setFieldState(el, ok, msg) {
+      el.classList.toggle('error', !ok);
+      const err = document.querySelector(`[data-error-for="${el.id}"]`);
+      if (err) err.textContent = msg;
+    }
+
+    function validateAll() {
+      return Object.values(F).map(fn => fn()).every(Boolean);
+    }
+
+    function togglePayButton() {
+      const payBtn = document.getElementById('payBtn');
+      if (!payBtn) return;
+      const checkoutStage = document.getElementById('checkoutStage');
+      if (checkoutStage && !checkoutStage.classList.contains('is-active')) { payBtn.disabled = true; return; }
+      if (!cart.length) { payBtn.disabled = true; return; }
+      const valid = validateAll();
+      payBtn.disabled = !valid;
+    }
+
+    // ===== Event wiring =====
+    function id(id) { return document.getElementById(id); }
+
+    function wire() {
+      // Product selection controls
+      document.querySelectorAll('.product-card').forEach(card => {
+        const productId = card.dataset.productId;
+        const input = card.querySelector('[data-role="qty"]');
+        if (!productId || !input) return;
+
+        card.querySelectorAll('button[data-action]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const delta = btn.dataset.action === 'increment' ? 1 : -1;
+            setQuantity(productId, (selections[productId] || 0) + delta);
+          });
+        });
+
+        input.addEventListener('input', () => {
+          const raw = input.value;
+          const value = raw === '' ? NaN : Number(raw);
+          setQuantity(productId, Number.isNaN(value) ? 0 : value);
+        });
+        input.addEventListener('blur', () => {
+          const raw = input.value;
+          const value = raw === '' ? NaN : Number(raw);
+          setQuantity(productId, Number.isNaN(value) ? 0 : value);
+        });
+      });
+
+      const startCheckout = id('startCheckout');
+      if (startCheckout) {
+        startCheckout.addEventListener('click', () => {
+          if (!cart.length) return;
+          document.getElementById('productView').hidden = true;
+          const checkoutStage = document.getElementById('checkoutStage');
+          checkoutStage.classList.add('is-active');
+          checkoutStage.setAttribute('aria-hidden', 'false');
+          renderSummaries();
+          togglePayButton();
+          document.getElementById('checkoutForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+
+      const backToShopping = id('backToShopping');
+      if (backToShopping) {
+        backToShopping.addEventListener('click', () => {
+          document.getElementById('productView').hidden = false;
+          const checkoutStage = document.getElementById('checkoutStage');
+          checkoutStage.classList.remove('is-active');
+          checkoutStage.setAttribute('aria-hidden', 'true');
+          togglePayButton();
+          document.getElementById('productView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+
+      // Live format & validate
+      id('cardNumber').addEventListener('input', (e) => {
+        e.target.value = formatCardNumber(e.target.value);
+        cardNumber('cardNumber');
+      });
+      id('expiry').addEventListener('input', (e) => { e.target.value = formatExpiry(e.target.value); expiry('expiry'); });
+      ;['fullName','email','address1','city','province','postal','country','cardName','cvc'].forEach(k => {
+        const el = id(k);
+        const handler = () => { F[k](); togglePayButton(); };
+        if (!el) return;
+        if (el.tagName === 'SELECT') {
+          el.addEventListener('change', handler);
+          el.addEventListener('blur', handler);
+        } else {
+          el.addEventListener('input', handler);
+          el.addEventListener('blur', handler);
+        }
+      });
+      id('cardNumber').addEventListener('input', () => { F.cardNumber(); togglePayButton(); });
+      id('expiry').addEventListener('input', () => { F.expiry(); togglePayButton(); });
+
+      id('shipping').addEventListener('change', (e) => { state.shippingMethod = e.target.value; renderSummaries(); });
+
+      id('coupon').addEventListener('change', (e) => {
+        const r = applyCoupon(e.target.value);
+        const footer = id('form-errors');
+        footer.textContent = r.msg;
+        footer.style.color = r.ok ? '#0a7d28' : '#b91c1c';
+        renderSummaries();
+      });
+
+      id('checkoutForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!cart.length) { id('form-errors').textContent = 'Add items to your cart before paying.'; id('form-errors').style.color = '#b91c1c'; return; }
+        if (!validateAll()) { id('form-errors').textContent = 'Please fix highlighted fields.'; id('form-errors').style.color = '#b91c1c'; return; }
+
+        const payBtn = id('payBtn');
+        const oldHtml = payBtn.innerHTML;
+        payBtn.disabled = true; payBtn.innerHTML = '<span class="spinner" aria-hidden="true"></span>&nbsp;Processing…';
+
+        await new Promise(res => setTimeout(res, 1200));
+
+        payBtn.disabled = false; payBtn.innerHTML = oldHtml;
+
+        id('form-errors').textContent = '';
+        showResult(true);
+      });
+
+      syncCart();
+    }
+
+    function showResult(success, reason) {
+      const { subtotal, shipping, tax, total } = compute();
+      const result = id('result');
+
+      const orderId = 'ord_' + Math.random().toString(36).slice(2, 10);
+
+      if (success) {
+        result.innerHTML = `
+          <h2>Payment successful</h2>
+          <p>Thanks, <strong>${escapeHtml(id('fullName').value)}</strong>. Your order is confirmed.</p>
+          <p>Order ID: <span class="orderid" data-testid="order-id">${orderId}</span></p>
+          <p>Total paid: <strong>${centsToZAR(total)}</strong></p>
+          <div class="again"><button class="btn" onclick="resetCheckout()" data-testid="start-over">Make another order</button></div>
+        `;
+      } else {
+        const map = {
+          card_declined: 'Your card was declined. Try a different payment method.',
+          insufficient_funds: 'Insufficient funds on the card.',
+          incorrect_cvc: 'The CVC you entered is incorrect.',
+          expired_card: 'The card has expired.'
+        };
+        result.innerHTML = `
+          <h2 class="fail">Payment failed</h2>
+          <p>${map[reason] || 'Payment could not be processed.'}</p>
+          <p class="footer-note">You can adjust details and try again.</p>
+          <div class="again"><button class="btn" onclick="backToForm()">Back to checkout</button></div>
+        `;
+      }
+
+      // hide form + summary, show result
+      const form = document.getElementById('checkoutForm');
+      const summary = document.querySelector('#checkoutStage .summary');
+      form.hidden = true; summary.hidden = true; result.hidden = false;
+    }
+
+    function backToForm() {
+      document.getElementById('result').hidden = true;
+      document.getElementById('checkoutForm').hidden = false;
+      const summary = document.querySelector('#checkoutStage .summary');
+      if (summary) summary.hidden = false;
+    }
+
+    function resetCheckout() { window.location.reload(); }
+
+    function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+    // Boot
+    document.addEventListener('DOMContentLoaded', () => {
+      wire();
+    });
+  </script>
+</body>
+</html>
